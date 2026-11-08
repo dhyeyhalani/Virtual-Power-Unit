@@ -94,9 +94,22 @@ def simulate_straight(Power_Ice, Power_MGUK, BAT_CAP):
 plt.figure(figsize=(9, 5))
 for caps in BATTERY_CAPACITY:
     dist_MJ, speed_MJ, energy_MJ, time_MJ = simulate_straight(P_ICE, P_MGUK, caps)
-    mj = caps/1_000_000
-    print(f"Full Power {mj:.0f}MJ  (ICE + MGU-K): end-of-straight speed = {speed_MJ[-1]:.0f} km/h")
-    plt.plot(dist_MJ, speed_MJ, label=f"Engine + (battery = {mj:.0f}MJ) ", linewidth=2)
+    mj = caps / 1_000_000
+
+    found = None
+    for i in range(len(energy_MJ)):
+        if energy_MJ[i] == 0:
+            found = i
+            break
+
+    if found is None:
+        empty = "battery never emptied"
+    else:
+        empty = f"battery empty at {time_MJ[found]:.2f} s ({dist_MJ[found]:.0f} m)"
+
+    print(f"Battery = {mj:.0f} MJ: {speed_MJ[-1]:.0f} km/h, "
+          f"straight took {time_MJ[-1]:.2f} s, {empty}")
+    plt.plot(dist_MJ, speed_MJ, label=f"Battery = {mj:.0f} MJ", linewidth=2)
 plt.xlabel("Distance along the straight (m)")
 plt.ylabel("Speed (km/h)")
 plt.title("Lesson 1: F1 car accelerating down a 1 km straight")
@@ -106,12 +119,8 @@ plt.tight_layout()
 plt.savefig("lesson1_speed_trace.png", dpi=120)
 plt.show()
 
-'''for i in range(len(energy_0MJ)):
-    if energy_0MJ[i] == 0:
-        store_index = i
-        break
-print(f"Battery empty at {time_0MJ[store_index]:.2f}s, {dist_0MJ[store_index]:.2f}m")
-             # engine only'''
+
+
 
 
 #print(f"Engine only (ICE)        : end-of-straight speed = {speed_ice[-1]:.0f} km/h")
