@@ -80,15 +80,13 @@ def simulate_straight(Power_Ice, Power_MGUK, BAT_CAP):
         speeds.append(speed)
         energies.append(energy)
         times.append(time)
-        #print(energies)
-        #print(times)
 
 
     return np.array(distances), np.array(speeds) * 3.6 , np.array(energies), np.array(times) # m/s -> km/h
 
 
 # ---------------------------------------------------------------------------
-# 3. RUN TWO SCENARIOS AND COMPARE
+# 3. Understanding the usage of battery
 # ---------------------------------------------------------------------------
 
 plt.figure(figsize=(9, 5))
@@ -123,7 +121,7 @@ plt.show()
 
 
 
-#print(f"Engine only (ICE)        : end-of-straight speed = {speed_ice[-1]:.0f} km/h")
+
 
 
 # Theoretical top speed: where push force = drag  ->  P = 0.5*rho*CdA*v^3
