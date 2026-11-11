@@ -1,37 +1,30 @@
 """
-Lesson 1 - Simulating an F1 car accelerating down a straight.
+Lesson 2 - Simulating an F1 car accelerating down a straight and considering the battery clipping depending on the tyres,
+and when can the driver deploy to get the maximum battery usage
 
 Project: Virtual 2026 Power Unit + Energy Strategy Optimizer
-Goal of this lesson: turn Newton's 2nd law (F = m * a) into a simulation.
+Goal of this lesson: Understand how tyre used affects the battery on different tracks
 
-Run:  python lesson1_straight_line.py
+Run:  python lesson2_smart_deployment.py
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
+from params import *
 
-# ---------------------------------------------------------------------------
-# 1. CAR PARAMETERS  (round, realistic-ish numbers - NOT official team data)
-# ---------------------------------------------------------------------------
-MASS = 800.0          # kg   car + driver + some fuel
-BATTERY_CAPACITY = [0.0, 2_000_000.0, 4_000_000.0, 6_000_000.0]
-P_ICE = 400_000.0     # W    combustion engine power (~400 kW)
-P_MGUK = 350_000.0    # W    electric motor power (~350 kW)
-CDA = 1.2             # m^2  drag coefficient x frontal area ("how draggy")
-RHO = 1.225           # kg/m^3 air density at sea level
-CRR = 0.015           # rolling resistance coefficient (tyre friction losses)
-G = 9.81              # m/s^2 gravity
-TYRE_GRIP = {"C1":1.25,"C2":1.30,"C3":1.35,"C4":1.40,"C5":1.45,"Intermediate":1.05,"Wet":0.85}     # max forward acceleration in g before the tyres spin
+def traction_limit_g(mu):
+    return (REAR_WEIGHT_FRACTION * mu) / (1 - mu * COG_HEIGHT / WHEELBASE)
 
-# ---------------------------------------------------------------------------
-# 2. SIMULATION SETTINGS
-# ---------------------------------------------------------------------------
-DT = 0.01                     # s    time step (100 updates per second)
-STRAIGHT_LENGTH = 1000.0      # m    roughly a Monza-length straight
-START_SPEED = 100 / 3.6       # m/s  corner-exit speed (100 km/h)
-
-
-def drive_force(speed, power):
+def mguk_dc_limit(speed_kph, rules):
+    if speed_kph < 340:
+        value = max(0, min(rules["ers_k_dc_max_kW"]*1_000, (1800-5*speed_kph)*1_000))
+        return value
+    elif speed_kph >=340 and speed_kph < 345:
+        value = max(0, min(rules["ers_k_dc_max_kW"]*1_000, (6900-20*speed_kph)*1_000))
+        return value
+    else:
+        return 0
+def drive_force(speed, power,grip_g):
     """Force the power unit can push the car with at this speed.
 
     Power = Force x Speed   ->   Force = Power / Speed
@@ -39,18 +32,18 @@ def drive_force(speed, power):
     so we cap it at the grip limit.
     """
     force_from_power = power / speed
-    force_grip_max = GRIP_LIMIT * MASS * G
+    force_grip_max = grip_g * MASS * G
     return min(force_from_power, force_grip_max)
 
 
 def resistive_forces(speed):
     """Forces slowing the car down."""
-    drag = 0.5 * RHO * CDA * speed**2      # grows with speed SQUARED
+    drag = 0.5 * RHO * CDA_STRAIGHT * speed**2      # grows with speed SQUARED
     rolling = CRR * MASS * G               # roughly constant
     return drag + rolling
 
 
-def simulate_straight(Power_Ice, Power_MGUK, BAT_CAP):
+def simulate_straight(BAT_CAP,grip, rules):
     """Simulate the car down the straight at a constant power.
 
     Returns arrays of distance (m) and speed (km/h).
@@ -63,25 +56,32 @@ def simulate_straight(Power_Ice, Power_MGUK, BAT_CAP):
 
     while distance < STRAIGHT_LENGTH:
 
-        if energy>0:
-        # Newton's 2nd law:  a = (F_push - F_resist) / m
-            accel = (drive_force(speed, Power_Ice + Power_MGUK) - resistive_forces(speed)) / MASS
-            energy_used = Power_MGUK * DT
-            energy = max(energy - energy_used, 0)
+        if energy > 0:
+            p_dc_allowed = mguk_dc_limit(speed * 3.6, rules)       # from battery (DC)
+            p_mech_allowed = ERS_EFFICIENCY * p_dc_allowed          # what reaches the car
+            max_tyre_power = grip * MASS * G * speed                # traction force x speed
+            useful_room = max_tyre_power - P_ICE                    # minus what the engine already gives
+            p_mech = max(0, min(p_mech_allowed, useful_room))
+            p_dc = p_mech / ERS_EFFICIENCY
+
+            if p_dc > energy / DT:
+                p_dc = energy / DT
+                p_mech = p_dc * ERS_EFFICIENCY
+
+            accel = (drive_force(speed, P_ICE + p_mech, grip) - resistive_forces(speed)) / MASS
+            energy = max(energy - p_dc * DT, 0)
         else:
-            accel = (drive_force(speed,Power_Ice) - resistive_forces(speed)) / MASS
+            accel = (drive_force(speed,P_ICE,grip) - resistive_forces(speed)) / MASS
 
         # Euler integration: nudge speed and position forward one tiny step
         time = time + DT
         speed = speed + accel * DT
         distance = distance + speed * DT
-
         distances.append(distance)
         speeds.append(speed)
         energies.append(energy)
         times.append(time)
-        #print(energies)
-        #print(times)
+
 
 
     return np.array(distances), np.array(speeds) * 3.6 , np.array(energies), np.array(times) # m/s -> km/h
@@ -92,9 +92,10 @@ def simulate_straight(Power_Ice, Power_MGUK, BAT_CAP):
 # ---------------------------------------------------------------------------
 
 plt.figure(figsize=(9, 5))
-for caps in BATTERY_CAPACITY:
-    dist_MJ, speed_MJ, energy_MJ, time_MJ = simulate_straight(P_ICE, P_MGUK, caps)
-    mj = caps / 1_000_000
+for name,mu in TYRE_MU.items():
+    grip = traction_limit_g(mu)
+    dist_MJ, speed_MJ, energy_MJ, time_MJ = simulate_straight(ES_SOC_WINDOW,grip,R)
+    mj = ES_SOC_WINDOW / 1_000_000
 
     found = None
     for i in range(len(energy_MJ)):
@@ -107,29 +108,17 @@ for caps in BATTERY_CAPACITY:
     else:
         empty = f"battery empty at {time_MJ[found]:.2f} s ({dist_MJ[found]:.0f} m)"
 
-    print(f"Battery = {mj:.0f} MJ: {speed_MJ[-1]:.0f} km/h, "
-          f"straight took {time_MJ[-1]:.2f} s, {empty}")
-    plt.plot(dist_MJ, speed_MJ, label=f"Battery = {mj:.0f} MJ", linewidth=2)
+    print(f"Tyre = {name}: {speed_MJ[-1]:.0f} km/h, "
+          f"straight took {time_MJ[-1]:.2f} s, {empty}, Energy Used :{(ES_SOC_WINDOW-energy_MJ[-1])/1_000_000:.2f} MJ")
+    plt.plot(dist_MJ, speed_MJ, label=f"Tyre type = {name}", linewidth=2)
 plt.xlabel("Distance along the straight (m)")
 plt.ylabel("Speed (km/h)")
-plt.title("Lesson 1: F1 car accelerating down a 1 km straight")
+plt.title("Lesson 2: Understanding the need of Smart Deployment")
 plt.grid(alpha=0.3)
 plt.legend()
 plt.tight_layout()
-plt.savefig("lesson1_speed_trace.png", dpi=120)
+plt.savefig("lesson2_SmartDeployment_trace.png", dpi=120)
 plt.show()
-
-
-
-
-
-#print(f"Engine only (ICE)        : end-of-straight speed = {speed_ice[-1]:.0f} km/h")
-
-
-# Theoretical top speed: where push force = drag  ->  P = 0.5*rho*CdA*v^3
-for name, p in [("Full power", P_ICE + P_MGUK), ("Engine only", P_ICE)]:
-    v_top = (2 * p / (RHO * CDA)) ** (1 / 3)
-    print(f"{name:11s} theoretical top speed = {v_top * 3.6:.0f} km/h")
 
 
 
